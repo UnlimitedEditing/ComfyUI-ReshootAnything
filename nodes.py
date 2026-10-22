@@ -41,17 +41,19 @@ class ReshootLoadVideo:
     def INPUT_TYPES(cls):
         return {"required": {
             "url": ("STRING", {"default": ""}),
-            "long_side": ("INT", {"default": 512, "min": 128, "max": 1280, "step": 16}),
+            "width": ("INT", {"default": 0, "min": 0, "max": 4096}),
+            "height": ("INT", {"default": 0, "min": 0, "max": 4096}),
             "length": ("INT", {"default": 77, "min": 5, "max": 161}),
             "fps": ("FLOAT", {"default": 16.0, "min": 1.0, "max": 60.0}),
-        }, "optional": {"filename": ("STRING", {"default": ""})}}
+        }, "optional": {"filename": ("STRING", {"default": ""}),
+                        "default_long_side": ("INT", {"default": 832, "min": 128, "max": 1920, "step": 16})}}
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "INT", "INT", "FLOAT", "BOOLEAN")
     RETURN_NAMES = ("frames", "audio", "width", "height", "length", "fps", "has_audio")
     FUNCTION = "load"
     CATEGORY = "Reshoot"
 
-    def load(self, url, long_side, length, fps, filename=""):
+    def load(self, url, width, height, length, fps, filename="", default_long_side=832):
         import folder_paths
         src = (url or "").strip() or (filename or "").strip()
         if not src:
@@ -75,12 +77,21 @@ class ReshootLoadVideo:
         sw, sh = _probe(path)
         if sw <= 0 or sh <= 0:
             sw, sh = 832, 480
-        s = long_side / max(sw, sh)
-        W = max(64, int(round(sw * s / 16.0)) * 16)
-        H = max(64, int(round(sh * s / 16.0)) * 16)
+        # width/height: 0 = not provided. Both set -> that size (source is cover-cropped, not stretched);
+        # one set -> the other follows the source aspect; neither -> default_long_side on the source aspect.
+        snap = lambda v: max(64, int(round(v / 16.0)) * 16)
+        if width > 0 and height > 0:
+            W, H = snap(width), snap(height)
+        elif width > 0:
+            W = snap(width); H = snap(W * sh / sw)
+        elif height > 0:
+            H = snap(height); W = snap(H * sw / sh)
+        else:
+            s = default_long_side / max(sw, sh)
+            W, H = snap(sw * s), snap(sh * s)
 
         p = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf",
-                            f"fps={fps},scale={W}:{H}:flags=lanczos", "-frames:v", str(n),
+                            f"fps={fps},scale={W}:{H}:flags=lanczos:force_original_aspect_ratio=increase,crop={W}:{H}", "-frames:v", str(n),
                             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         buf = np.frombuffer(p.stdout, dtype=np.uint8)
